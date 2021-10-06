@@ -2,14 +2,17 @@ package webdav
 
 import (
 	"context"
+	"crypto/sha1"
 	"errors"
 	"fmt"
 	"github.com/jakeslee/aliyundrive"
 	"github.com/jakeslee/aliyundrive/models"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/webdav"
+	"hash"
 	"io"
 	"io/fs"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,17 +24,20 @@ const (
 	CtxSizeValue = "Size"
 )
 
-func NewAliDriveFS(drive *aliyundrive.AliyunDrive, credential *aliyundrive.Credential) webdav.FileSystem {
+func NewAliDriveFS(drive *aliyundrive.AliyunDrive, credential *aliyundrive.Credential, rapid bool) webdav.FileSystem {
+	logrus.Infof("rapid upload mode: %v", rapid)
 	return &aliDriveFS{
-		driver:     drive,
-		credential: credential,
+		driver:      drive,
+		credential:  credential,
+		rapidUpload: rapid,
 	}
 }
 
 type aliDriveFS struct {
-	mu         sync.Mutex
-	driver     *aliyundrive.AliyunDrive
-	credential *aliyundrive.Credential
+	mu          sync.Mutex
+	driver      *aliyundrive.AliyunDrive
+	credential  *aliyundrive.Credential
+	rapidUpload bool
 }
 
 func (a *aliDriveFS) mkdir(credential *aliyundrive.Credential, fileId, name string) (string, error) {
@@ -107,22 +113,34 @@ func (a *aliDriveFS) OpenFile(ctx context.Context, name string, flag int, perm o
 
 		fileName := filepath.Base(name)
 
-		reader, writer := io.Pipe()
-
 		_file := &aliFile{
 			n: &aliFileInfo{
-				size:    size,
-				name:    fileName,
-				mode:    perm,
-				modTime: time.Now(),
+				size:         size,
+				name:         fileName,
+				mode:         perm,
+				modTime:      time.Now(),
+				parentFileId: fileId,
 			},
-			driver:     a.driver,
-			credential: a.credential,
+			driver:      a.driver,
+			credential:  a.credential,
+			enableRapid: a.rapidUpload,
 		}
 
-		fileC := make(chan string)
+		if a.rapidUpload {
+			tempFile, err := ioutil.TempFile("", "*." + fileName)
+			if err != nil {
+				return nil, err
+			}
 
-		_file.create.fileC = fileC
+			_file.rapid.hash = sha1.New()
+			_file.rapid.file = tempFile
+			_file.rapid.writer = io.MultiWriter(_file.rapid.hash, tempFile)
+
+			return _file, nil
+		}
+
+		reader, writer := io.Pipe()
+
 		_file.create.reader = reader
 		_file.create.writer = writer
 
@@ -176,8 +194,14 @@ type aliFile struct {
 		writePos int64
 		reader   io.Reader
 		writer   io.Writer
-		fileC    chan string
 		finished bool
+	}
+	// 用于秒传
+	enableRapid bool
+	rapid       struct {
+		hash   hash.Hash
+		file   *os.File
+		writer io.Writer
 	}
 }
 
@@ -342,12 +366,59 @@ func (a *aliFile) Stat() (fs.FileInfo, error) {
 	return a.n, nil
 }
 
+func (a *aliFile) rapidWrite(p []byte) (n int, err error) {
+	n, err = a.rapid.writer.Write(p)
+	if err != nil {
+		logrus.Errorf("upload %s error %s", a.n.name, err)
+		return n, err
+	}
+
+	a.pos += int64(n)
+
+	if a.pos >= a.n.size {
+		logrus.Infof("upload %s finished, start rapid process...", a.n.name)
+		logrus.Infof("%s temporory stores in %s", a.n.name, a.rapid.file.Name())
+
+		go func() {
+			_hash := fmt.Sprintf("%x", a.rapid.hash.Sum(nil))
+			defer func(file *os.File) {
+				_ = file.Close()
+			}(a.rapid.file)
+
+			fileRapid, rapid, err := a.driver.UploadFileRapid(a.credential, &aliyundrive.UploadFileRapidOptions{
+				UploadFileOptions: aliyundrive.UploadFileOptions{
+					Name:         a.n.name,
+					Size:         a.n.size,
+					ParentFileId: a.n.parentFileId,
+				},
+				File:        a.rapid.file,
+				ContentHash: _hash,
+			})
+
+			if err != nil {
+				logrus.Errorf("rapid upload fail, error %s", err)
+				return
+			}
+
+			logrus.Infof("upload %s finished, rapid mode: %v, fileId %s", a.n.name, rapid, fileRapid.FileId)
+			a.n.file = fileRapid
+			a.n.fileId = fileRapid.FileId
+		}()
+	}
+
+	return n, nil
+}
+
 func (a *aliFile) Write(p []byte) (n int, err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	if a.n.IsDir() {
 		return 0, os.ErrInvalid
+	}
+
+	if a.enableRapid {
+		return a.rapidWrite(p)
 	}
 
 	if a.create.writer != nil {
@@ -491,22 +562,24 @@ func NewAliFileInfo(file *models.File) os.FileInfo {
 	}
 
 	return &aliFileInfo{
-		fileId:  file.FileId,
-		file:    file,
-		name:    file.Name,
-		size:    file.Size,
-		mode:    mode,
-		modTime: file.UpdatedAt,
+		parentFileId: file.ParentFileId,
+		fileId:       file.FileId,
+		file:         file,
+		name:         file.Name,
+		size:         file.Size,
+		mode:         mode,
+		modTime:      file.UpdatedAt,
 	}
 }
 
 type aliFileInfo struct {
-	fileId  string
-	file    *models.File
-	name    string
-	size    int64
-	mode    os.FileMode
-	modTime time.Time
+	fileId       string
+	parentFileId string
+	file         *models.File
+	name         string
+	size         int64
+	mode         os.FileMode
+	modTime      time.Time
 }
 
 func (f *aliFileInfo) Name() string       { return f.name }
