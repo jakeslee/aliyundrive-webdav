@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"github.com/alexflint/go-arg"
 	nested "github.com/antonfisher/nested-logrus-formatter"
 	"github.com/jakeslee/aliyundrive"
+	"github.com/jakeslee/aliyundrive-webdav/internal"
 	aliWebdav "github.com/jakeslee/aliyundrive-webdav/internal/webdav"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/webdav"
@@ -12,7 +15,7 @@ import (
 )
 
 func main() {
-	refreshToken := "***REMOVED***"
+	arg.MustParse(internal.Config)
 
 	logrus.SetFormatter(&nested.Formatter{
 		HideKeys: true,
@@ -23,7 +26,7 @@ func main() {
 	})
 
 	cred, err := drive.AddCredential(aliyundrive.NewCredential(&aliyundrive.Credential{
-		RefreshToken: refreshToken,
+		RefreshToken: internal.Config.RefreshToken,
 	}).RegisterChangeEvent(func(credential *aliyundrive.Credential) {
 		logrus.Infof("credential changed")
 	}))
@@ -34,7 +37,7 @@ func main() {
 	}
 
 	h := &webdav.Handler{
-		FileSystem: aliWebdav.NewAliDriveFS(drive, cred),
+		FileSystem: aliWebdav.NewAliDriveFS(drive, cred, internal.Config.RapidUpload),
 		LockSystem: webdav.NewMemLS(),
 	}
 
@@ -48,6 +51,8 @@ func main() {
 		h.ServeHTTP(writer, ctxRequest)
 	})
 
-	logrus.Infof("webdav server started at %s")
-	log.Fatal(http.ListenAndServe(":18080", nil))
+	hosted := fmt.Sprintf("%s:%d", internal.Config.Host, internal.Config.Port)
+
+	logrus.Infof("webdav server started at %s", hosted)
+	log.Fatal(http.ListenAndServe(hosted, nil))
 }

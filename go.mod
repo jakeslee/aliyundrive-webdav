@@ -14,6 +14,8 @@ require (
 )
 
 require (
+	github.com/alexflint/go-arg v1.4.2 // indirect
+	github.com/alexflint/go-scalar v1.0.0 // indirect
 	github.com/allegro/bigcache/v3 v3.0.1 // indirect
 	github.com/antonfisher/nested-logrus-formatter v1.3.1 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
