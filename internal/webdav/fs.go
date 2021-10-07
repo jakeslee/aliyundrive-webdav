@@ -1,6 +1,7 @@
 package webdav
 
 import (
+	"container/list"
 	"context"
 	"crypto/sha1"
 	"errors"
@@ -23,6 +24,9 @@ import (
 const (
 	CtxSizeValue = "Size"
 )
+
+var RapidCache = sync.Map{}
+var RapidCacheFolder = sync.Map{}
 
 func NewAliDriveFS(drive *aliyundrive.AliyunDrive, credential *aliyundrive.Credential, rapid bool) webdav.FileSystem {
 	logrus.Infof("rapid upload mode: %v", rapid)
@@ -77,6 +81,18 @@ func (a *aliDriveFS) OpenFile(ctx context.Context, name string, flag int, perm o
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	if a.rapidUpload {
+		if cacheFile, ok := RapidCache.Load(name); ok {
+			logrus.Infof("reqeusted file %s is uploading in background, use local cached file", name)
+
+			file, err := os.OpenFile(cacheFile.(string), flag, perm)
+			if err != nil {
+				return nil, err
+			}
+			return file, nil
+		}
+	}
+
 	size := ctx.Value(CtxSizeValue).(int64)
 
 	fileId, path, err := a.driver.ResolvePathToFileId(a.credential, name)
@@ -124,10 +140,11 @@ func (a *aliDriveFS) OpenFile(ctx context.Context, name string, flag int, perm o
 			driver:      a.driver,
 			credential:  a.credential,
 			enableRapid: a.rapidUpload,
+			fullPath:    name,
 		}
 
 		if a.rapidUpload {
-			tempFile, err := ioutil.TempFile("", "*." + fileName)
+			tempFile, err := ioutil.TempFile("", "*."+fileName)
 			if err != nil {
 				return nil, err
 			}
@@ -172,16 +189,20 @@ func (a *aliDriveFS) OpenFile(ctx context.Context, name string, flag int, perm o
 	}
 
 	fileInfo := NewAliFileInfo(file.File)
+	fileRes := &aliFile{
+		n:           fileInfo.(*aliFileInfo),
+		driver:      a.driver,
+		credential:  a.credential,
+		fullPath:    name,
+		enableRapid: a.rapidUpload,
+	}
 
-	return &aliFile{
-		n:          fileInfo.(*aliFileInfo),
-		driver:     a.driver,
-		credential: a.credential,
-	}, nil
+	return fileRes, nil
 }
 
 type aliFile struct {
 	n              *aliFileInfo
+	fullPath       string
 	mu             sync.Mutex
 	driver         *aliyundrive.AliyunDrive
 	credential     *aliyundrive.Credential
@@ -199,9 +220,10 @@ type aliFile struct {
 	// 用于秒传
 	enableRapid bool
 	rapid       struct {
-		hash   hash.Hash
-		file   *os.File
-		writer io.Writer
+		hash     hash.Hash
+		file     *os.File
+		writer   io.Writer
+		finished bool
 	}
 }
 
@@ -303,6 +325,18 @@ func (a *aliFile) Readdir(count int) ([]fs.FileInfo, error) {
 
 	result := make([]fs.FileInfo, 0, 10)
 
+	if a.enableRapid {
+		if filesInterface, ok := RapidCacheFolder.Load(a.n.fileId); ok {
+			if files, ok := filesInterface.(*list.List); ok {
+				for i := files.Front(); i != nil; i = i.Next() {
+					info := i.Value.(*aliFileInfo)
+
+					result = append(result, info)
+				}
+			}
+		}
+	}
+
 	// 取目录全部列表
 	if count <= 0 {
 		marker := ""
@@ -377,12 +411,21 @@ func (a *aliFile) rapidWrite(p []byte) (n int, err error) {
 
 	if a.pos >= a.n.size {
 		logrus.Infof("upload %s finished, start rapid process...", a.n.name)
-		logrus.Infof("%s temporory stores in %s", a.n.name, a.rapid.file.Name())
+		logrus.Infof("%s temporary stores in %s", a.n.name, a.rapid.file.Name())
+
+		RapidCache.Store(a.fullPath, a.rapid.file.Name())
+		files, _ := RapidCacheFolder.LoadOrStore(a.n.parentFileId, list.New())
+		l := files.(*list.List)
+		l.PushBack(a.n)
 
 		go func() {
 			_hash := fmt.Sprintf("%x", a.rapid.hash.Sum(nil))
 			defer func(file *os.File) {
 				_ = file.Close()
+				err := os.Remove(file.Name())
+				if err != nil {
+					logrus.Warnf("remove temp file error %s", err)
+				}
 			}(a.rapid.file)
 
 			fileRapid, rapid, err := a.driver.UploadFileRapid(a.credential, &aliyundrive.UploadFileRapidOptions{
@@ -403,6 +446,17 @@ func (a *aliFile) rapidWrite(p []byte) (n int, err error) {
 			logrus.Infof("upload %s finished, rapid mode: %v, fileId %s", a.n.name, rapid, fileRapid.FileId)
 			a.n.file = fileRapid
 			a.n.fileId = fileRapid.FileId
+			a.rapid.finished = true
+
+			logrus.Debugf("remove file's local cache: %s", a.fullPath)
+			RapidCache.Delete(a.fullPath)
+			for i := l.Front(); i != nil; i = i.Next() {
+				value := i.Value.(fs.FileInfo)
+				if value.Name() == a.n.name {
+					l.Remove(i)
+				}
+			}
+
 		}()
 	}
 
@@ -537,6 +591,12 @@ func (a *aliDriveFS) Rename(ctx context.Context, oldName, newName string) error 
 }
 
 func (a *aliDriveFS) Stat(ctx context.Context, name string) (os.FileInfo, error) {
+	if a.rapidUpload {
+		if _fileName, ok := RapidCache.Load(name); ok {
+			return os.Stat(_fileName.(string))
+		}
+	}
+
 	fileId, _, err := a.driver.ResolvePathToFileId(a.credential, name)
 	if err != nil {
 		if err == aliyundrive.ErrPartialFoundPath {
