@@ -81,9 +81,9 @@ func (a *aliDriveFS) OpenFile(ctx context.Context, name string, flag int, perm o
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.rapidUpload {
+	if a.rapidUpload && flag&os.O_CREATE == 0 {
 		if cacheFile, ok := RapidCache.Load(name); ok {
-			logrus.Infof("reqeusted file %s is uploading in background, use local cached file", name)
+			logrus.Infof("reqeusted file %s hit local cached file", name)
 
 			file, err := os.OpenFile(cacheFile.(string), flag, perm)
 			if err != nil {
@@ -115,9 +115,9 @@ func (a *aliDriveFS) OpenFile(ctx context.Context, name string, flag int, perm o
 
 	if flag&os.O_CREATE != 0 {
 		// 创建时，如果文件已经存在，大小相同不再上传
-		if exist && size == file.Size {
-			return nil, os.ErrExist
-		}
+		//if exist && size == file.Size {
+		//	return nil, os.ErrExist
+		//}
 
 		// 否则删除文件，重新上传
 		if exist {
@@ -125,9 +125,14 @@ func (a *aliDriveFS) OpenFile(ctx context.Context, name string, flag int, perm o
 			if err != nil {
 				return nil, err
 			}
+			fileId = file.ParentFileId
 		}
 
 		fileName := filepath.Base(name)
+
+		if fileName == ".DS_Store" {
+			return nil, os.ErrInvalid
+		}
 
 		_file := &aliFile{
 			n: &aliFileInfo{
@@ -154,6 +159,10 @@ func (a *aliDriveFS) OpenFile(ctx context.Context, name string, flag int, perm o
 			_file.rapid.writer = io.MultiWriter(_file.rapid.hash, tempFile)
 
 			return _file, nil
+		}
+
+		if size <= 0 {
+			return nil, os.ErrInvalid
 		}
 
 		reader, writer := io.Pipe()
@@ -228,11 +237,19 @@ type aliFile struct {
 }
 
 func (a *aliFile) Close() error {
-	if a.create.writer != nil && !a.create.finished {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	// 常规上传
+	if !a.create.finished && a.create.writer != nil {
 		err := a.create.writer.(*io.PipeWriter).Close()
 		if err != nil {
 			return err
 		}
+	}
+
+	// 秒传
+	if !a.rapid.finished && a.rapid.file != nil {
+		a.uploadFinished()
 	}
 
 	a.closeReader()
@@ -309,7 +326,7 @@ func (a *aliFile) Seek(offset int64, whence int) (int64, error) {
 
 func (a *aliFile) closeReader() {
 	if a.reader != nil && !a.readerClosed {
-		a.reader.Close()
+		_ = a.reader.Close()
 		a.reader = nil
 		a.readerClosed = true
 	}
@@ -324,6 +341,7 @@ func (a *aliFile) Readdir(count int) ([]fs.FileInfo, error) {
 	}
 
 	result := make([]fs.FileInfo, 0, 10)
+	resultMap := make(map[string]fs.FileInfo)
 
 	if a.enableRapid {
 		if filesInterface, ok := RapidCacheFolder.Load(a.n.fileId); ok {
@@ -332,6 +350,7 @@ func (a *aliFile) Readdir(count int) ([]fs.FileInfo, error) {
 					info := i.Value.(*aliFileInfo)
 
 					result = append(result, info)
+					resultMap[info.name] = info
 				}
 			}
 		}
@@ -354,7 +373,9 @@ func (a *aliFile) Readdir(count int) ([]fs.FileInfo, error) {
 			}
 
 			for _, item := range files.Items {
-				result = append(result, NewAliFileInfo(item))
+				if _, ok := resultMap[item.Name]; !ok {
+					result = append(result, NewAliFileInfo(item))
+				}
 			}
 
 			if files.NextMarker == "" {
@@ -370,7 +391,11 @@ func (a *aliFile) Readdir(count int) ([]fs.FileInfo, error) {
 	for {
 		for ; a.pos < int64(len(a.lastFetchItems)) && count > 0; a.pos++ {
 			count--
-			result = append(result, NewAliFileInfo(a.lastFetchItems[a.pos]))
+
+			item := a.lastFetchItems[a.pos]
+			if _, ok := resultMap[item.Name]; !ok {
+				result = append(result, NewAliFileInfo(item))
+			}
 		}
 
 		if count <= 0 {
@@ -409,58 +434,67 @@ func (a *aliFile) rapidWrite(p []byte) (n int, err error) {
 
 	a.pos += int64(n)
 
-	if a.pos >= a.n.size {
-		logrus.Infof("upload %s finished, start rapid process...", a.n.name)
-		logrus.Infof("%s temporary stores in %s", a.n.name, a.rapid.file.Name())
+	return n, nil
+}
 
-		RapidCache.Store(a.fullPath, a.rapid.file.Name())
-		files, _ := RapidCacheFolder.LoadOrStore(a.n.parentFileId, list.New())
-		l := files.(*list.List)
-		l.PushBack(a.n)
+func (a *aliFile) uploadFinished() {
+	logrus.Infof("upload %s finished. size: %d/%d, start rapid process...", a.n.name, a.pos, a.n.size)
+	logrus.Infof("%s temporary stores in %s", a.n.name, a.rapid.file.Name())
 
-		go func() {
-			_hash := fmt.Sprintf("%x", a.rapid.hash.Sum(nil))
-			defer func(file *os.File) {
-				_ = file.Close()
+	RapidCache.Store(a.fullPath, a.rapid.file.Name())
+	files, _ := RapidCacheFolder.LoadOrStore(a.n.parentFileId, list.New())
+	l := files.(*list.List)
+	l.PushBack(a.n)
+
+	if a.n.size <= 0 {
+		a.n.size = a.pos
+	}
+
+	go func() {
+		_hash := fmt.Sprintf("%x", a.rapid.hash.Sum(nil))
+		defer func(file *os.File) {
+			_ = file.Close()
+			time.AfterFunc(1 * time.Minute, func() {
+				a.mu.Lock()
+				defer a.mu.Unlock()
+				logrus.Debugf("remove file's local cache: %s", a.fullPath)
+
+				for i := l.Front(); i != nil; i = i.Next() {
+					value := i.Value.(fs.FileInfo)
+					if value.Name() == a.n.name {
+						l.Remove(i)
+					}
+				}
+
+				RapidCache.Delete(a.fullPath)
+
 				err := os.Remove(file.Name())
 				if err != nil {
 					logrus.Warnf("remove temp file error %s", err)
 				}
-			}(a.rapid.file)
-
-			fileRapid, rapid, err := a.driver.UploadFileRapid(a.credential, &aliyundrive.UploadFileRapidOptions{
-				UploadFileOptions: aliyundrive.UploadFileOptions{
-					Name:         a.n.name,
-					Size:         a.n.size,
-					ParentFileId: a.n.parentFileId,
-				},
-				File:        a.rapid.file,
-				ContentHash: _hash,
 			})
+		}(a.rapid.file)
 
-			if err != nil {
-				logrus.Errorf("rapid upload fail, error %s", err)
-				return
-			}
+		fileRapid, rapid, err := a.driver.UploadFileRapid(a.credential, &aliyundrive.UploadFileRapidOptions{
+			UploadFileOptions: aliyundrive.UploadFileOptions{
+				Name:         a.n.name,
+				Size:         a.n.size,
+				ParentFileId: a.n.parentFileId,
+			},
+			File:        a.rapid.file,
+			ContentHash: _hash,
+		})
 
-			logrus.Infof("upload %s finished, rapid mode: %v, fileId %s", a.n.name, rapid, fileRapid.FileId)
-			a.n.file = fileRapid
-			a.n.fileId = fileRapid.FileId
-			a.rapid.finished = true
+		if err != nil {
+			logrus.Errorf("rapid upload fail, error %s", err)
+			return
+		}
 
-			logrus.Debugf("remove file's local cache: %s", a.fullPath)
-			RapidCache.Delete(a.fullPath)
-			for i := l.Front(); i != nil; i = i.Next() {
-				value := i.Value.(fs.FileInfo)
-				if value.Name() == a.n.name {
-					l.Remove(i)
-				}
-			}
-
-		}()
-	}
-
-	return n, nil
+		logrus.Infof("upload %s finished, rapid mode: %v, fileId %s", a.n.name, rapid, fileRapid.FileId)
+		a.n.file = fileRapid
+		a.n.fileId = fileRapid.FileId
+		a.rapid.finished = true
+	}()
 }
 
 func (a *aliFile) Write(p []byte) (n int, err error) {
@@ -485,18 +519,6 @@ func (a *aliFile) Write(p []byte) (n int, err error) {
 		a.create.writePos += int64(n)
 
 		logrus.Debugf("uploaded %d, writepos: %d", n, a.create.writePos)
-
-		if a.create.writePos >= a.n.size {
-			logrus.Debugf("pos >= size, %d, %d", a.create.writePos, a.n.size)
-
-			err := a.create.writer.(*io.PipeWriter).Close()
-			if err != nil {
-				return n, err
-			}
-
-			return n, nil
-		}
-
 		return n, nil
 	}
 
@@ -593,7 +615,13 @@ func (a *aliDriveFS) Rename(ctx context.Context, oldName, newName string) error 
 func (a *aliDriveFS) Stat(ctx context.Context, name string) (os.FileInfo, error) {
 	if a.rapidUpload {
 		if _fileName, ok := RapidCache.Load(name); ok {
-			return os.Stat(_fileName.(string))
+			stat, err := os.Stat(_fileName.(string))
+			if err != nil {
+				logrus.Warnf("read cached file error %s", err)
+				RapidCache.Delete(name)
+			} else {
+				return stat, nil
+			}
 		}
 	}
 

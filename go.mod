@@ -17,4 +17,7 @@ require (
 require (
 	github.com/alexflint/go-scalar v1.0.0 // indirect
 	github.com/allegro/bigcache/v3 v3.0.0 // indirect
+	github.com/robfig/cron/v3 v3.0.1 // indirect
 )
+
+replace github.com/jakeslee/aliyundrive => /Users/jakes/Develop/Go/projects/aliyundrive
