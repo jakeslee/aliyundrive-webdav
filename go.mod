@@ -7,7 +7,7 @@ require (
 	github.com/antonfisher/nested-logrus-formatter v1.3.1
 	github.com/asaskevich/EventBus v0.0.0-20200907212545-49d423059eef // indirect
 	github.com/go-resty/resty/v2 v2.6.0 // indirect
-	github.com/jakeslee/aliyundrive v1.0.0
+	github.com/jakeslee/aliyundrive v1.0.1
 	github.com/jinzhu/copier v0.3.2 // indirect
 	github.com/sirupsen/logrus v1.8.1
 	golang.org/x/net v0.0.0-20210924151903-3ad01bbaa167

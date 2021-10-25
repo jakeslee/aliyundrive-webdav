@@ -16,6 +16,8 @@ github.com/go-resty/resty/v2 v2.6.0 h1:joIR5PNLM2EFqqESUjCMGXrWmXNHEU9CEiK813oKY
 github.com/go-resty/resty/v2 v2.6.0/go.mod h1:PwvJS6hvaPkjtjNg9ph+VrSD92bi5Zq73w/BIH7cC3Q=
 github.com/jakeslee/aliyundrive v1.0.0 h1:ghtcSAitAOLS2rnwtn2kvrklfMGmCelE3PHCAkk1zCI=
 github.com/jakeslee/aliyundrive v1.0.0/go.mod h1:+QLwqfzTJdVVq02Jf+dOTalepT4fzwgo/BisotHAYMk=
+github.com/jakeslee/aliyundrive v1.0.1 h1:kX3qKBO35xR0NZn3ZrVcsdXhDHIa+wHQvZo74HHvIWc=
+github.com/jakeslee/aliyundrive v1.0.1/go.mod h1:O5UIzPU78zb8jJ5KjeX0bHcyBruFAJDMTYM/2DiGjVs=
 github.com/jinzhu/copier v0.3.2 h1:QdBOCbaouLDYaIPFfi1bKv5F5tPpeTwXe4sD0jqtz5w=
 github.com/jinzhu/copier v0.3.2/go.mod h1:24xnZezI2Yqac9J61UC6/dG/k76ttpq0DdJI3QmUvro=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=

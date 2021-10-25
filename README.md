@@ -6,15 +6,19 @@
 
 ```shell
 $ ./aliyundrive-webdav -h        
-aliyundrive-webdav 0.0.2
-Usage: main [--host HOST] [--port PORT] --refreshtoken REFRESHTOKEN [--rapid]
+aliyundrive-webdav 0.0.7
+Usage: aliyundrive-webdav [--host HOST] [--port PORT] [--refreshtoken REFRESHTOKEN] [--rapid] [--workdir WORKDIR] [--upload-speed UPLOAD-SPEED]
 
 Options:
   --host HOST, -h HOST   监听地址 [default: 0.0.0.0]
   --port PORT, -p PORT   监听端口 [default: 18080]
   --refreshtoken REFRESHTOKEN, -r REFRESHTOKEN
-                         Refresh Token [env: REFRESH_TOKEN]
+                         Refresh Token [default: false, env: REFRESH_TOKEN]
   --rapid                秒传，默认关闭 [default: false, env: RAPID]
+  --workdir WORKDIR, -w WORKDIR
+                         工作目录，用于保存 RefreshToken 刷新结果 [default: /tmp, env: WORK_DIR]
+  --upload-speed UPLOAD-SPEED
+                         上传速度限制，单位 MB/s，默认无限制 [env: UPLOAD_SPEED]
   --help, -h             display this help and exit
   --version              display version and exit
 ```
