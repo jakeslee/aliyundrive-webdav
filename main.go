@@ -32,6 +32,7 @@ func main() {
 
 	drive := aliyundrive.NewClient(&aliyundrive.Options{
 		AutoRefresh: true,
+		UploadRate: internal.Config.UploadSpeed * 1024 * 1024,
 	})
 
 	rtFromFile := internal.Config.RefreshToken

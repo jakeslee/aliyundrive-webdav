@@ -12,6 +12,7 @@ require (
 	github.com/sirupsen/logrus v1.8.1
 	golang.org/x/net v0.0.0-20210924151903-3ad01bbaa167
 	golang.org/x/sys v0.0.0-20210915083310-ed5796bab164 // indirect
+	golang.org/x/time v0.0.0-20210723032227-1f47c861a9ac // indirect
 )
 
 require (
@@ -20,4 +21,4 @@ require (
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 )
 
-replace github.com/jakeslee/aliyundrive => /Users/jakes/Develop/Go/projects/aliyundrive
+// replace github.com/jakeslee/aliyundrive => /Users/jakes/Develop/Go/projects/aliyundrive
