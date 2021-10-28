@@ -74,8 +74,34 @@ func main() {
 		},
 	}
 
+	enableAuth := false
+
+	if internal.Config.AuthType != "none" {
+		enableAuth = true
+	}
+
+	logrus.Infof("auth type: %s", internal.Config.AuthType)
+
 	http.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
 		logrus.Infof("request %s %s", request.Method, request.RequestURI)
+
+		if enableAuth {
+			username, password, ok := request.BasicAuth()
+
+			if !ok {
+				writer.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
+				writer.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+
+			if username != internal.Config.HttpUsername || password != internal.Config.HttpPassword {
+				logrus.Warnf("authentication error, un: %s, pwd: %s, ip: %s", username, password, request.RemoteAddr)
+				http.Error(writer, "WebDAV: need authorized!", http.StatusUnauthorized)
+				return
+			}
+		}
+
+		writeCORSHeader(writer)
 
 		if requestSuffersFinderProblem(request) {
 			err := handleFinderRequest(writer, request)
@@ -95,6 +121,12 @@ func main() {
 
 	logrus.Infof("webdav server started at %s", hosted)
 	log.Fatal(http.ListenAndServe(hosted, nil))
+}
+
+func writeCORSHeader(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE,UPDATE")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
 }
 
 func requestSuffersFinderProblem(r *http.Request) bool {
