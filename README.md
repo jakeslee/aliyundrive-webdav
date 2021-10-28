@@ -1,4 +1,6 @@
 # aliyundrive-webdav
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fjakeslee%2Faliyundrive-webdav.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fjakeslee%2Faliyundrive-webdav?ref=badge_shield)
+
 
 基于 aliyundrive 开发的 WebDAV 服务。
 
@@ -33,3 +35,7 @@ Options:
 
 为了优化秒传模式，上传到服务器后中转到阿里云盘时文件不可访问的问题，请求时会回退到本地缓存的文件作为响应。成功上传后才使用阿里云盘的文件作为响应。
 
+
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fjakeslee%2Faliyundrive-webdav.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fjakeslee%2Faliyundrive-webdav?ref=badge_large)
